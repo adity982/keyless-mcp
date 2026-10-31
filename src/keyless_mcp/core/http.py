@@ -155,9 +155,11 @@ class HttpClient:
         self, adapter: AdapterHttp, method: str, url: str, json_body: Any
     ) -> tuple[cassette.RecordedResponse, int]:
         retryable = method.upper() == "GET"
-        deadline = self._clock() + self.config.timeout
+        deadline: float | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             await adapter.limiter.acquire()
+            if deadline is None:
+                deadline = self._clock() + self.config.timeout
             remaining = deadline - self._clock()
             if remaining <= 0:
                 raise UpstreamError(

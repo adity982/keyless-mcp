@@ -99,14 +99,41 @@ def test_replay_and_record_require_a_cassette_directory() -> None:
 
 @pytest.mark.parametrize("status", [404, 500, 503])
 def test_http_errors_become_upstream_errors_with_the_status(status) -> None:
+    async def no_sleep(_seconds: float) -> None:
+        pass
+
     api = client_with(
-        lambda r: httpx.Response(status, json={"message": "nope"}), HttpMode.LIVE
+        lambda r: httpx.Response(status, json={"message": "nope"}),
+        HttpMode.LIVE,
+        sleep=no_sleep,
     ).for_adapter("demo", 600)
     with pytest.raises(UpstreamError) as caught:
         run(lambda: api.get_json(URL))
     assert caught.value.status == status
     assert f"HTTP {status}" in str(caught.value)
     assert "nope" in str(caught.value)
+
+
+def test_timeout_budget_starts_after_initial_rate_limit_wait() -> None:
+    calls = []
+    now = [0.0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    async def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    async def request_after_queued_slot():
+        api = client_with(handler, HttpMode.LIVE, clock=lambda: now[0]).for_adapter("demo", 1)
+        api.limiter = RateLimiter(1, clock=lambda: now[0], sleep=sleep)
+        await api.limiter.acquire()
+        return await api.get_json(URL)
+
+    assert run(request_after_queued_slot) == {"ok": True}
+    assert now[0] == 60.0
+    assert len(calls) == 1
 
 
 def test_error_responses_are_recorded_so_error_paths_can_be_replayed(tmp_path) -> None:
